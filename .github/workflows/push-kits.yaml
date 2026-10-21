@@ -8,6 +8,10 @@ on:
     branches: [main]
     paths:
       - "spec.yaml"
+      # v3 kit (built and pushed alongside the v2 spec)
+      - "openhands.yaml"
+      - "openhands.dockerfile"
+      - "openhands-context.md"
       - "kits/**"
       - "files/**"
       - "providers/**"
@@ -80,6 +84,34 @@ jobs:
           DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_USERNAME }}
           TAG: ${{ inputs.tag || 'latest' }}
         run: bash ./scripts/push-kits.sh
+
+      # --- v3 kit, built and pushed alongside the v2 spec ---
+      # The kit frontend is pulled automatically from openhands.yaml's
+      # `# syntax=docker/sandbox-kit:3` line, so nothing extra is installed.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Publish v3 kit
+        # Distinct :v3 tags so the v3 artifact never overwrites the v2 :latest
+        # the step above pushes. The Docker Hub login above authenticates the
+        # buildx --push.
+        env:
+          DOCKERHUB_NAMESPACE: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set -euo pipefail
+          image="docker.io/${DOCKERHUB_NAMESPACE}/sbx-openhands-kits"
+          version="$(sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/p' openhands.yaml | head -n1)"
+          version="${version:-1.0.0}"
+          docker buildx build . -f openhands.yaml \
+            --platform linux/amd64,linux/arm64 \
+            --provenance=true \
+            --push \
+            -t "$image:v3" \
+            -t "$image:v3-$version"
+          echo "Pushed $image:v3 and $image:v3-$version"
 
       - name: Sync Docker Hub overview page
         # Cosmetic: updates the Hub repo's overview README from DOCKERHUB.md.

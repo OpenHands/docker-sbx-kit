@@ -1,0 +1,148 @@
+# syntax=docker/sandbox-kit:3
+# yaml-language-server: $schema=https://raw.githubusercontent.com/docker/sandbox-kit-spec/main/schema/kit.schema.json
+#
+# OpenHands Agent Canvas as a Kit v3 workload — the same declarations as the v2
+# ./spec.yaml (kept: this repo supports both v2 and v3), expressed as typed
+# capabilities. The v3 files sit at the kit root, matching the flat layout every
+# kit in docker/sandbox-kit-spec uses.
+#
+# MIGRATION NOTE (v2 → v3): the v2 kit was `kind: sandbox` → `kind: workload`
+# (never write "sandbox"). It is a self-contained agent sandbox: it owns its
+# image, entrypoint and credentials, so there is no base-agent coupling. The v2
+# `setup.install` hooks (npm/uv installs and the launcher scripts) are now baked
+# into the recipe at BUILD time (see openhands.dockerfile), so nothing is
+# fetched or written at create — which is why there is no lifecycle@1 and no
+# install network phase below.
+schemaVersion: "3"
+kind: workload
+displayName: OpenHands Agent Canvas
+description: |
+  OpenHands Agent Canvas — the browser UI + agent-server — running as a
+  self-contained Docker sandbox. Multi-provider via LiteLLM (Anthropic / OpenAI /
+  Gemini); API keys stay proxy-managed and never enter the sandbox. Forward port
+  8000 and open http://localhost:8000.
+sourceUrl: https://github.com/ajeetraina/sbx-kits-openhands
+licenses: [MIT]
+
+# MIGRATION NOTE: the v2 kit set no `version`, `sourceUrl` or `licenses`. All
+# three only surface at publish (as the org.opencontainers.image.* annotations),
+# so a faithful migration adds them rather than discovering the loss after the
+# artifact is already in a registry.
+version: "1.0.0"
+
+# MIGRATION NOTE: no `provides`. A pinned provide is a claim about content the
+# build must enforce. The kit installs the floating `@openhands/agent-canvas`
+# npm package and the `openhands` tool with no version pin (v2 pinned neither),
+# so there is no version it could honestly offer — offering nothing matchable is
+# the correct answer.
+
+# MIGRATION NOTE: no `requires`. v2 could only express `requires: {agent: X}`
+# and declared none (a `kind: sandbox` kit owns its own image). The Node.js 22
+# and uv the build needs come from the recipe's own base, not from a composed
+# workload, so there is nothing beyond the platform floor to name.
+
+capabilities:
+  # MIGRATION NOTE: no sbx@1. sbx@1 asks the host to launch the agent in place
+  # of the image entrypoint as PID 1. This kit's entrypoint IS the Canvas server
+  # (openhands-canvas-launch boots agent-canvas on $PORT and serves it), so the
+  # entrypoint must stay PID 1 — declaring sbx@1 would stop the server from ever
+  # starting. It is a long-running service reached on a port, so it declares
+  # long-running@1 + port@1 instead.
+  - type: com.docker.sandbox/long-running@1
+
+  # v2 ports[] → port@1, one per port. name/container carry over; v2 defaulted
+  # to tcp, which is port@1's default transport.
+  - type: com.docker.sandbox/port@1
+    description: Agent Canvas browser UI + agent-server
+    config:
+      name: canvas
+      container: 8000
+
+  # v2 permissions.network.allow → network-policy@1 (host-only rules, so @1).
+  # v3 is phase-scoped; an absent phase grants nothing.
+  #
+  # MIGRATION NOTE: there is no `install:` phase. In v2 the flat allow-list also
+  # covered the create-time `setup.install` hooks; here those installs are baked
+  # at BUILD time (build network is not gated by this policy), so only the hosts
+  # the running Canvas / agent-server / agent reach are declared. v2's
+  # registry.npmjs.org and nodejs.org were install-only (npm install of
+  # agent-canvas) and are therefore not reached at runtime — dropped here.
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      runtime:
+        allow:
+          # LLM providers — also the credential inject hosts below.
+          - api.anthropic.com
+          - api.openai.com
+          - generativelanguage.googleapis.com
+          # agent-server, fetched at runtime by `uvx --from openhands-agent-server`.
+          - pypi.org
+          - files.pythonhosted.org
+          - astral.sh
+          - "*.astral.sh"
+          - docker.openhands.dev
+          - "*.openhands.dev"
+          - ghcr.io
+          - pkg-containers.githubusercontent.com
+          # git / gh workflows inside the sandbox.
+          - github.com
+          - api.github.com
+          - raw.githubusercontent.com
+          - objects.githubusercontent.com
+
+  # v2 credentials[] → credential@1, one per service. As a self-contained
+  # sandbox the kit declares its own credentials; the real key never enters the
+  # container — proxyManaged plants a sentinel in-container and the sbx proxy
+  # swaps the real key onto the wire on the inject hosts. Store keys with
+  # `sbx secret set <service>`.
+  #
+  # MIGRATION NOTE: v2 credentials default to not-required; v3 entries are
+  # required unless they opt out, so `optional: true` preserves v2 behavior —
+  # the sandbox still starts with no key bound (pick the provider in the UI).
+  - type: com.docker.sandbox/credential@1
+    optional: true
+    description: Anthropic API access
+    config:
+      service: anthropic
+      phase: runtime
+      apiKey:
+        name: ANTHROPIC_API_KEY
+        proxyManaged: true
+        inject:
+          - {domain: api.anthropic.com, header: x-api-key, format: "%s"}
+  - type: com.docker.sandbox/credential@1
+    optional: true
+    description: OpenAI API access
+    config:
+      service: openai
+      phase: runtime
+      apiKey:
+        name: OPENAI_API_KEY
+        proxyManaged: true
+        # MIGRATION NOTE: v2's `scheme: bearer` shorthand is expressed as an
+        # explicit Bearer Authorization header — how every v3 example presents
+        # bearer auth — so the behavior is identical.
+        inject:
+          - {domain: api.openai.com, header: Authorization, format: "Bearer %s"}
+  # `google` (not `gemini`) is the canonical service name across sbx kits, so a
+  # binding set for one kit is reused here.
+  - type: com.docker.sandbox/credential@1
+    optional: true
+    description: Google / Gemini API access
+    config:
+      service: google
+      phase: runtime
+      apiKey:
+        name: GEMINI_API_KEY
+        proxyManaged: true
+        inject:
+          - {domain: generativelanguage.googleapis.com, header: x-goog-api-key, format: "%s"}
+
+  # v2 agentInstructions → agent-context@1. The body moved verbatim into
+  # openhands-context.md. `filename: AGENTS.md` is workload-only — the workload
+  # owns the agent profile. The body interpolates no args, so a staged
+  # contentFile (not inline content) is correct.
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      filename: AGENTS.md
+      contentFile: ./openhands-context.md

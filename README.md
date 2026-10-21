@@ -41,6 +41,33 @@ The model defaults to `anthropic/claude-opus-4-8` and is pre-seeded into Canvas.
 Switch providers in **Settings > LLM**, or recreate with `LLM_MODEL` overridden
 and the matching `sbx secret set <anthropic|openai|google>`.
 
+## v2 and v3
+
+This repo ships the kit in **both** schema versions, side by side at the repo
+root:
+
+| Version | Files | Published tag |
+|---|---|---|
+| v2 | `spec.yaml` | `docker.io/ajeetraina777/sbx-openhands-kits:latest` |
+| v3 | `openhands.yaml`, `openhands.dockerfile`, `openhands-context.md` | `docker.io/ajeetraina777/sbx-openhands-kits:v3` |
+
+The v3 files follow the flat per-kit layout used by
+[`docker/sandbox-kit-spec`](https://github.com/docker/sandbox-kit-spec): the
+`spec.yaml` grammar becomes typed capabilities in `openhands.yaml`, the image is
+built from `openhands.dockerfile`, and the agent instructions live in
+`openhands-context.md`.
+
+```bash
+# Validate the v3 descriptor (fails in seconds on a bad field)
+docker buildx build . -f openhands.yaml --output type=cacheonly
+
+# Build the v3 kit locally
+docker buildx build . -f openhands.yaml -t sbx-openhands-kit:v3 --load
+
+# Launch the published v3 kit — forward port 8000, then open http://localhost:8000
+sbx run -p 8000 --kit docker.io/ajeetraina777/sbx-openhands-kits:v3 openhands
+```
+
 ## What the kit does
 
 1. Installs OpenHands **Agent Canvas** (`@openhands/agent-canvas`) and the
